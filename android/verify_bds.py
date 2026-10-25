@@ -1,6 +1,9 @@
 import re
+import string
 import sys
+import unicodedata
 import zipfile
+from collections import defaultdict
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
@@ -29,6 +32,123 @@ def collect_codes_from_bytes(raw: bytes):
     f_codes = set(re.findall(r"\bF\d+\b", txt))
     s_codes = set(re.findall(r"\bS\d+[_A-Z0-9]*\b", txt))
     return f_codes, s_codes
+
+
+def verify_english_ascii_punctuation(ini: dict, css: dict, path: str):
+    expected_down = {
+        "w": ("€", "192"),
+        "y": ("^", "185"), "u": ("[", "186"), "i": ("]", "187"), "o": ("~", "119"),
+        "h": ("$", "113"), "j": ("|", "190"), "k": ("{", "188"), "l": ("}", "189"),
+        "z": ('"', "178"), "x": ("\\", "179"), "c": ("+", "180"), "v": ("=", "181"),
+        "b": ("`", "182"), "n": ("<", "183"), "m": (">", "184"),
+    }
+    extensions = set("€•°§")
+    direct, popup = set(), set()
+    primary_slots = defaultdict(list)
+    for section, key in ini.items():
+        if not re.fullmatch(r"(?:KEY|TIP)\d+", section):
+            continue
+        for action in ("CENTER", "SHOW", "UP", "DOWN", "LEFT", "RIGHT", "HOLD", "HOLDSYM"):
+            value = key.get(action, "")
+            # Full-width indentation spaces are an existing functional shortcut,
+            # not punctuation; keep it rather than introducing trim-sensitive tabs.
+            assert value.isspace() or all(c.isascii() or c in extensions for c in value), f"{path}/{section}/{action}: unexpected non-ASCII choice {value!r}"
+            if action in {"CENTER", "UP", "DOWN", "LEFT", "RIGHT"}:
+                direct.update(c for c in value if c in string.punctuation or c in extensions)
+                if section.startswith("KEY") and (value == "..." or (len(value) == 1 and value in set(string.punctuation) | extensions)):
+                    primary_slots[value].append(f"{section}/{action}")
+        popup.update(c for c in key.get("HOLDSYM", "") if c in string.punctuation or c in extensions)
+        letter = key.get("CENTER", "").lower()
+        if letter in expected_down:
+            symbol, style = expected_down[letter]
+            assert key["DOWN"] == symbol, f"{path}/{section}: wrong English down swipe"
+            assert key["FORE_STYLE"].split(",")[2] == style
+            assert css["STYLE" + style]["SHOW"] == symbol
+            assert symbol in key["HOLDSYM"]
+        if section.startswith("KEY") and len(letter) == 1 and letter in string.ascii_lowercase:
+            fore = key["FORE_STYLE"].split(",")
+            for index, action in [(1, "UP"), (2, "DOWN")]:
+                value = key.get(action, "")
+                if value and not value.isspace() and not re.match(r"^[A-Z][\d+]", value):
+                    assert css["STYLE" + fore[index]]["SHOW"] == value, f"{path}/{section}: mismatched {action} legend"
+            # Follow actual state references rather than hardcoding remapped TIP IDs.
+            for target in re.findall(r"S\d+_(\d+)", key.get("STAT_STYLE", "")):
+                state = ini["TIP" + target]
+                for action in ("UP", "DOWN", "LEFT", "RIGHT", "HOLDSYM"):
+                    assert state.get(action) == key.get(action), f"{path}/{section}/TIP{target}: stale {action}"
+                assert state["FORE_STYLE"].split(",")[1:] == fore[1:]
+    assert set(string.punctuation) <= direct, f"{path}: missing direct symbols {set(string.punctuation)-direct}"
+    assert set(string.punctuation) <= popup, f"{path}: missing popup symbols {set(string.punctuation)-popup}"
+    assert extensions <= direct and extensions <= popup
+    duplicates = {s: slots for s, slots in primary_slots.items() if len(slots) > 1}
+    assert not duplicates, f"{path}: duplicate primary punctuation actions: {duplicates}"
+    assert len(primary_slots) == 37, f"{path}: expected 32 ASCII + 4 extended + one ellipsis action"
+    assert ini["KEY12"]["UP"] == "@" and ini["KEY20"]["DOWN"] == '"' and ini["KEY26"]["UP"] == "?"
+    assert ini["KEY11"]["UP"] == "!"
+    assert ini["KEY31"]["CENTER"] == "," and ini["KEY31"]["UP"] == "•" and ini["KEY31"]["DOWN"] == "..."
+    assert ini["KEY31"]["FORE_STYLE"] == "666,193,191,135" and ini["KEY31"]["LEFT"] == "F42"
+    assert css["STYLE666"]["SHOW"] == "," and css["STYLE191"]["SHOW"] == "..."
+    assert css["STYLE192"]["SHOW"] == "€" and css["STYLE193"]["SHOW"] == "•"
+    assert css["STYLE194"]["SHOW"] == "°" and css["STYLE195"]["SHOW"] == "§"
+    assert ini["TIP3"]["CENTER"] == "F25" and ini["TIP3"]["FORE_STYLE"] == "912,193,191,135"
+    assert ini["TIP3"]["UP"] == "•" and ini["TIP3"]["DOWN"] == "..." and ini["TIP3"]["LEFT"] == "F42"
+    assert ini["KEY33"]["CENTER"] == "." and ini["KEY33"]["UP"] == "°" and ini["KEY33"]["DOWN"] == "§"
+    assert ini["KEY33"]["FORE_STYLE"] == "72,194,195,136" and ini["KEY33"]["RIGHT"] == "F43"
+    assert ini["KEY33"]["HOLDSYM"] == ".°§"
+
+
+def verify_chinese_26_punctuation(ini: dict, css: dict, path: str):
+    upper = {
+        11: ("！", "215"), 12: ("@", "111"), 13: ("#", "112"), 14: ("%", "114"),
+        16: ("&", "115"), 17: ("×", "207"), 18: ("（", "216"), 19: ("）", "217"),
+        20: ("‘", "211"), 21: ("/", "120"), 22: ("-", "121"), 23: ("_", "122"),
+        24: ("：", "218"), 25: ("；", "219"), 26: ("？", "220"),
+    }
+    down = {
+        2: ("￥", "202"), 6: ("——", "203"), 7: ("【", "204"), 8: ("】", "205"), 9: ("～", "206"),
+        16: ("$", "113"), 17: ("÷", "208"), 18: ("「", "209"), 19: ("」", "210"),
+        20: ("“", "172"), 21: ("\\", "179"), 22: ("+", "180"), 23: ("=", "181"),
+        24: ("·", "213"), 25: ("《", "175"), 26: ("》", "176"),
+    }
+    expected_symbols = {s for s, _ in upper.values()} | {s for s, _ in down.values()} | {"，", "。", "、", "……", "’", "”"}
+    assert len(expected_symbols) == 37
+    for action, index, expected in [("UP", 1, upper), ("DOWN", 2, down)]:
+        for number, (symbol, style) in expected.items():
+            key = ini[f"KEY{number}"]
+            assert key[action] == symbol, f"{path}/KEY{number}: wrong {action} symbol"
+            assert key["FORE_STYLE"].split(",")[index] == style
+            assert css["STYLE" + style]["SHOW"] == symbol
+            assert set(symbol) <= set(key["HOLDSYM"])
+    for number, digit in enumerate("1234567890", 1):
+        assert ini[f"KEY{number}"]["UP"] == digit
+    slots = defaultdict(list)
+    for section, key in ini.items():
+        if not re.fullmatch(r"KEY\d+", section):
+            continue
+        for action in ("CENTER", "UP", "DOWN", "LEFT", "RIGHT"):
+            value = key.get(action, "")
+            if value and all(unicodedata.category(c)[0] in {"P", "S"} for c in value):
+                slots[value].append(f"{section}/{action}")
+        letter = key.get("CENTER", "")
+        if len(letter) == 1 and letter in string.ascii_letters:
+            allowed = {letter.lower(), letter.upper()}
+            for action in ("CENTER", "SHOW", "UP", "DOWN", "LEFT", "RIGHT"):
+                value = key.get(action, "")
+                if not re.match(r"^[A-Z][\d+]", value):
+                    allowed.update(c for c in value if not c.isspace())
+            assert set(key["HOLDSYM"]) == allowed, f"{path}/{section}: stale long-press symbols"
+            for target in re.findall(r"S\d+_(\d+)", key.get("STAT_STYLE", "")):
+                state = ini["TIP" + target]
+                for action in ("UP", "DOWN", "LEFT", "RIGHT", "HOLDSYM"):
+                    assert state.get(action) == key.get(action), f"{path}/{section}: stale state TIP{target}"
+    assert set(slots) == expected_symbols, f"{path}: incorrect symbol coverage {set(slots) ^ expected_symbols}"
+    assert all(len(v) == 1 for v in slots.values()), f"{path}: duplicate primary punctuation actions {dict(slots)}"
+    assert ini["KEY31"]["CENTER"] == "，" and ini["KEY31"]["UP"] == "、" and ini["KEY31"]["DOWN"] == "……"
+    assert ini["KEY31"]["FORE_STYLE"] == "913,170,214,135" and ini["KEY31"]["LEFT"] == "F42"
+    assert ini["KEY31"]["HOLDSYM"] == "，、…"
+    assert ini["KEY33"]["CENTER"] == "。" and ini["KEY33"]["UP"] == "’" and ini["KEY33"]["DOWN"] == "”"
+    assert ini["KEY33"]["FORE_STYLE"] == "914,212,173,136" and ini["KEY33"]["RIGHT"] == "F43"
+    assert ini["KEY33"]["HOLDSYM"] == "。’”"
 
 
 def main():
@@ -88,7 +208,7 @@ def main():
         assert "Style=default" in info_txt, "Info.txt missing Style=default"
         assert "SupportDarkMode=1" in info_txt, "Info.txt missing SupportDarkMode=1"
         assert "Abilities=Sound" in info_txt, "Info.txt missing Abilities=Sound"
-        assert "VersionCode=8" in info_txt, "Expected the native long-press popup release (v8)"
+        assert "VersionCode=13" in info_txt, "Expected the matched Chinese 26-key punctuation release (v13)"
 
         for ogg_path in [
             "light/res/aj.ogg",
@@ -181,11 +301,23 @@ def main():
                     assert ini14["KEY9"]["DOWN"] == "F45" and ini14["KEY9"]["FORE_STYLE"] == "17,18,108,132"
                     assert ini14["KEY10"]["DOWN"] == "F46" and ini14["KEY10"]["FORE_STYLE"] == "19,109,133"
                     # Row 3 letter keys (KEY11..14 -> ZX, CV, BN, M): Chinese punctuation on UP and DOWN
-                    assert ini14["KEY11"]["UP"] == "：" and ini14["KEY11"]["DOWN"] == "……"
-                    assert ini14["KEY12"]["UP"] == "“" and ini14["KEY12"]["DOWN"] == "”"
-                    assert ini14["KEY13"]["UP"] == "8" and ini14["KEY13"]["DOWN"] == "？"
-                    assert ini14["KEY13"]["HOLDSYM"] == "bBnN8？"
-                    assert ini14["KEY14"]["UP"] == "（" and ini14["KEY14"]["DOWN"] == "）"
+                    assert ini14["KEY11"]["UP"] == "：" and ini14["KEY11"]["DOWN"] == "“"
+                    assert ini14["KEY11"]["FORE_STYLE"] == "20,21,123,172"
+                    assert ini14["KEY11"]["HOLDSYM"] == "zZxX：“"
+                    assert ini14["KEY12"]["UP"] == "；" and ini14["KEY12"]["DOWN"] == "”"
+                    assert ini14["KEY12"]["FORE_STYLE"] == "22,23,124,173"
+                    assert ini14["KEY12"]["HOLDSYM"] == "cCvV；”"
+                    # Keep gestures, keycap labels and native long-press choices in sync.
+                    assert ini14["KEY13"]["UP"] == "8" and ini14["KEY13"]["DOWN"] == "（"
+                    assert ini14["KEY13"]["FORE_STYLE"] == "24,25,107,117"
+                    assert ini14["KEY13"]["HOLDSYM"] == "bBnN8（"
+                    assert ini14["KEY14"]["UP"] == "？" and ini14["KEY14"]["DOWN"] == "）"
+                    assert ini14["KEY14"]["FORE_STYLE"] == "26,125,118"
+                    assert ini14["KEY14"]["HOLDSYM"] == "mM？）"
+                    # Existing compact keycap glyphs use ASCII for these symbols.
+                    assert css["STYLE117"]["SHOW"] == "(" and css["STYLE125"]["SHOW"] == "?"
+                    assert css["STYLE124"]["SHOW"] == ";" and css["STYLE171"]["SHOW"] == "…"
+                    assert css["STYLE172"]["SHOW"] == "“"
                     registered_letters = {
                         v for section, values in ini14.items() if section.startswith("KEY")
                         for k, v in values.items()
@@ -219,8 +351,9 @@ def main():
                     assert (
                         ini14["KEY19"]["LEFT"] == "F42"
                         and ini14["KEY19"]["UP"] == "、"
-                        and ini14["KEY19"]["DOWN"] == "；"
-                        and ini14["KEY19"]["FORE_STYLE"] == "913,170,124,135"
+                        and ini14["KEY19"]["DOWN"] == "……"
+                        and ini14["KEY19"]["FORE_STYLE"] == "913,170,171,135"
+                        and ini14["KEY19"]["HOLDSYM"] == "，、…"
                     )
                     assert ini14["KEY20"]["UP"] == "F77"
                     assert (
@@ -234,10 +367,11 @@ def main():
                 # Verify 26-key layouts (py_26.ini, def_26.ini, en_26.ini, en_26s.ini)
                 for fn26 in ["py_26.ini", "def_26.ini", "en_26.ini", "en_26s.ini"]:
                     ini26 = parse_ini_dict(zf.read(f"{theme}/{ori}/{fn26}").decode("utf-8"))
+                    is_en26 = fn26 in {"en_26.ini", "en_26s.ini"}
                     assert int(ini26["PANEL"]["KEY_NUM"]) == 34
-                    # Row 1: Q=menu(F31), W=undo(F40), E=del(F37), R=clear(F48), T=tab(　　), P=hide(F8)
+                    # Row 1: Q=menu(F31), W=@, E=del(F37), R=clear(F48), T=tab(　　), P=hide(F8)
                     assert ini26["KEY1"]["DOWN"] == "F31"
-                    assert ini26["KEY2"]["DOWN"] == "@"
+                    assert ini26["KEY2"]["DOWN"] == ("€" if is_en26 else "￥")
                     assert ini26["KEY3"]["DOWN"] == "F37"
                     assert ini26["KEY4"]["DOWN"] == "F48"
                     assert ini26["KEY5"]["DOWN"] == "　　"
@@ -253,13 +387,13 @@ def main():
                         and ini26["KEY15"]["LEFT"] == "F51"
                         and ini26["KEY15"]["RIGHT"] == "F52"
                     )
-                    # Row 3 letter keys (Z..M -> KEY20..26): Chinese punctuation on DOWN
-                    expected_r3_dn = {
-                        "KEY20": "、",
-                        "KEY21": "……",
-                        "KEY22": "——",
-                        "KEY23": "“",
-                        "KEY24": "”",
+                    # Row 3 letter keys (Z..M -> KEY20..26), language-specific.
+                    expected_r3_dn = dict(zip([f"KEY{i}" for i in range(20, 27)], ['"', "\\", "+", "=", "`", "<", ">"])) if is_en26 else {
+                        "KEY20": "“",
+                        "KEY21": "\\",
+                        "KEY22": "+",
+                        "KEY23": "=",
+                        "KEY24": "·",
                         "KEY25": "《",
                         "KEY26": "》",
                     }
@@ -279,22 +413,24 @@ def main():
                         and ini26["KEY28"]["CENTER"] == "F36"
                         and ini26["KEY28"]["HOLD"] == "F36"
                     )
-                    # Row 4: KEY29(123), KEY30(EN/CH->F84), KEY31(，->LEFT=F42, UP=、, DOWN=；), KEY32(SPACE), KEY33(。->RIGHT=F43, UP=？, DOWN=！), KEY34(ENTER->clip F76)
+                    # Row 4: KEY29(123), KEY30(EN/CH->F84), KEY31(，->LEFT=F42, UP=、, DOWN=……), KEY32(SPACE), KEY33(。->RIGHT=F43, UP=！, DOWN=——), KEY34(ENTER->clip F76)
                     assert ini26["KEY29"]["UP"] == "F7"
                     assert ini26["KEY30"]["UP"] == "F84"
-                    assert (
-                        ini26["KEY31"]["LEFT"] == "F42"
-                        and ini26["KEY31"]["UP"] == "、"
-                        and ini26["KEY31"]["DOWN"] == "；"
-                        and ini26["KEY31"]["FORE_STYLE"] == "913,170,124,135"
-                    )
+                    if is_en26:
+                        verify_english_ascii_punctuation(ini26, css, f"{theme}/{ori}/{fn26}")
+                    else:
+                        verify_chinese_26_punctuation(ini26, css, f"{theme}/{ori}/{fn26}")
                     assert ini26["KEY32"]["UP"] == "F77"
-                    assert (
-                        ini26["KEY33"]["RIGHT"] == "F43"
-                        and ini26["KEY33"]["UP"] == "！"
-                        and ini26["KEY33"]["DOWN"] == "——"
-                        and ini26["KEY33"]["FORE_STYLE"] == "914,110,174,136"
-                    )
+                    if not is_en26:
+                        assert (
+                            ini26["KEY33"]["RIGHT"] == "F43"
+                            and ini26["KEY33"]["UP"] == "’"
+                            and ini26["KEY33"]["DOWN"] == "”"
+                            and ini26["KEY33"]["FORE_STYLE"] == "914,212,173,136"
+                            and ini26["KEY33"]["CENTER"] == "。"
+                            and ini26["KEY33"]["HOLDSYM"] == "。’”"
+                        )
+                    assert css["STYLE72"]["NM_IMG"] == "letter,72" and css["STYLE72"]["HL_IMG"] == "letter_p,72"
                     assert ini26["KEY34"]["UP"] == "F76" and ini26["KEY34"]["FORE_STYLE"] == "917,624"
 
                 # Verify num_9.ini / num_26.ini

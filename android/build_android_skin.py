@@ -1,3 +1,4 @@
+import argparse
 import io
 import os
 import re
@@ -8,8 +9,8 @@ from PIL import Image, ImageDraw
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-BUILD_DIR = Path(r"C:\Users\Administrator\baiduime\_build")
-OUT_DIR = Path(r"C:\Users\Administrator\baiduime")
+OUT_DIR = Path(__file__).resolve().parents[1]
+BUILD_DIR = OUT_DIR / "_build"
 EXTRACTED_DIR = BUILD_DIR / "extracted"
 
 TEXT_EXTS = {".ini", ".cnd", ".css", ".til", ".txt", ".pop"}
@@ -24,6 +25,22 @@ BASE_ANJIAN_STYLES = {
     235: (11, 12, 1100, 0, 110, 120, 28, 28),
     237: (13, 14, 1320, 0, 110, 60, 28, 4),
     238: (15, 16, 1320, 60, 110, 100, 4, 28),
+}
+
+# Dedicated English legends; Chinese layouts continue to use STYLE170..176.
+ENGLISH_SYMBOL_STYLES = {
+    178: '"', 179: "\\", 180: "+", 181: "=", 182: "`",
+    183: "<", 184: ">", 185: "^", 186: "[", 187: "]",
+    188: "{", 189: "}", 190: "|", 191: "...",
+    192: "€", 193: "•", 194: "°", 195: "§",
+}
+
+# Separate legends keep full-width Chinese punctuation out of English layouts.
+CHINESE_26_SYMBOL_STYLES = {
+    202: "￥", 203: "——", 204: "【", 205: "】", 206: "～",
+    207: "×", 208: "÷", 209: "「", 210: "」", 211: "‘", 212: "’",
+    213: "·", 214: "……", 215: "！", 216: "（", 217: "）",
+    218: "：", 219: "；", 220: "？",
 }
 
 
@@ -213,7 +230,7 @@ def make_android_info_txt(name: str, dual_mode: bool = True, has_sound: bool = T
         lines.append("Abilities=Sound")
     # Bump on release. Deploy via ImeUpdateActivity + Apply under a versioned
     # filename; overwriting an already active .bds does not reload its keymap.
-    lines.append("VersionCode=8")
+    lines.append("VersionCode=13")
     return "\r\n".join(lines) + "\r\n"
 
 
@@ -364,6 +381,105 @@ def add_hold_symbol_popups(sections):
             remove_sec_key(items, "HOLD")
 
 
+def patch_english_ascii_punctuation(sections):
+    """Expose all 32 US ASCII punctuation characters without losing edit gestures.
+
+    Patch the letter's state TIPs as well as its primary KEY, so temporary Shift
+    and Caps Lock cannot bring back Chinese symbols or obsolete popup choices.
+    Preserve the letter-key upper swipes, digits, cursor and native slide-delete.
+    Use four distinct Western extensions (€ • ° §) in formerly duplicate slots.
+    """
+    down_symbols = {
+        "w": ("€", 192),
+        "y": ("^", 185), "u": ("[", 186), "i": ("]", 187), "o": ("~", 119),
+        "h": ("$", 113), "j": ("|", 190), "k": ("{", 188), "l": ("}", 189),
+        "z": ('"', 178), "x": ("\\", 179), "c": ("+", 180), "v": ("=", 181),
+        "b": ("`", 182), "n": ("<", 183), "m": (">", 184),
+    }
+    for name, items in sections:
+        if not name or not re.match(r"^(KEY|TIP)\d+$", name, re.I):
+            continue
+        center = get_sec_val(items, "CENTER") or ""
+        if len(center) == 1 and center.isascii() and center.isalpha():
+            # add_hold_symbol_popups must only see the new directional choices.
+            remove_sec_key(items, "HOLD")
+            remove_sec_key(items, "HOLDSYM")
+            if center.lower() in down_symbols:
+                symbol, style_id = down_symbols[center.lower()]
+                fore = (get_sec_val(items, "FORE_STYLE") or "").split(",")
+                assert len(fore) >= 2, f"{name}: missing center/upper legend"
+                set_sec_val(items, "DOWN", symbol)
+                set_sec_val(items, "FORE_STYLE", ",".join(fore[:2] + [str(style_id)]))
+                set_sec_val(items, "POS_TYPE", "1,2,3")
+        elif name == "KEY31" or name == "TIP3":
+            # Retain TIP3's native F25 action/icon, but never its Chinese flicks.
+            base_fore = "666" if name == "KEY31" else "912"
+            set_sec_val(items, "UP", "•")
+            set_sec_val(items, "DOWN", "...")
+            set_sec_val(items, "FORE_STYLE", f"{base_fore},193,191,135")
+            remove_sec_key(items, "HOLD")
+            remove_sec_key(items, "HOLDSYM")
+        elif name == "KEY33":
+            set_sec_val(items, "UP", "°")
+            set_sec_val(items, "DOWN", "§")
+            set_sec_val(items, "FORE_STYLE", "72,194,195,136")
+            remove_sec_key(items, "HOLD")
+            remove_sec_key(items, "HOLDSYM")
+
+
+def patch_chinese_26_punctuation(sections):
+    """Mirror English's filled symbol slots, using distinct Chinese alternatives.
+
+    Opening single/double quotes live on Z; the closing counterparts live on
+    the full-stop key. Book-title, square and corner brackets remain paired.
+    Numeric, editing, navigation and 14-key layouts are not changed.
+    """
+    upper_symbols = {
+        "a": ("！", 215), "s": ("@", 111), "d": ("#", 112), "f": ("%", 114),
+        "h": ("&", 115), "j": ("×", 207), "k": ("（", 216), "l": ("）", 217),
+        "z": ("‘", 211), "x": ("/", 120), "c": ("-", 121), "v": ("_", 122),
+        "b": ("：", 218), "n": ("；", 219), "m": ("？", 220),
+    }
+    down_symbols = {
+        "w": ("￥", 202), "y": ("——", 203), "u": ("【", 204), "i": ("】", 205), "o": ("～", 206),
+        "h": ("$", 113), "j": ("÷", 208), "k": ("「", 209), "l": ("」", 210),
+        "z": ("“", 172), "x": ("\\", 179), "c": ("+", 180), "v": ("=", 181),
+        "b": ("·", 213), "n": ("《", 175), "m": ("》", 176),
+    }
+    for name, items in sections:
+        if not name or not re.match(r"^(KEY|TIP)\d+$", name, re.I):
+            continue
+        center = get_sec_val(items, "CENTER") or ""
+        if len(center) == 1 and center.isascii() and center.isalpha():
+            remove_sec_key(items, "HOLD")
+            remove_sec_key(items, "HOLDSYM")
+            letter = center.lower()
+            fore = (get_sec_val(items, "FORE_STYLE") or "").split(",")
+            if letter in upper_symbols:
+                symbol, style_id = upper_symbols[letter]
+                set_sec_val(items, "UP", symbol)
+                fore[1] = str(style_id)
+            if letter in down_symbols:
+                symbol, style_id = down_symbols[letter]
+                set_sec_val(items, "DOWN", symbol)
+                fore = fore[:2] + [str(style_id)]
+                set_sec_val(items, "POS_TYPE", "1,2,3")
+            if letter in upper_symbols or letter in down_symbols:
+                set_sec_val(items, "FORE_STYLE", ",".join(fore))
+        elif name == "KEY31":
+            set_sec_val(items, "UP", "、")
+            set_sec_val(items, "DOWN", "……")
+            set_sec_val(items, "FORE_STYLE", "913,170,214,135")
+            remove_sec_key(items, "HOLD")
+            remove_sec_key(items, "HOLDSYM")
+        elif name == "KEY33":
+            set_sec_val(items, "UP", "’")
+            set_sec_val(items, "DOWN", "”")
+            set_sec_val(items, "FORE_STYLE", "914,212,173,136")
+            remove_sec_key(items, "HOLD")
+            remove_sec_key(items, "HOLDSYM")
+
+
 def patch_layout_ini_android(orientation: str, fname: str, text: str):
     """
     Apply the full redesigned keyboard layout and gestures to Android INI files:
@@ -379,15 +495,15 @@ def patch_layout_ini_android(orientation: str, fname: str, text: str):
         JK: UP=9, DOWN=copy(F45, 132)
         L : UP=0, DOWN=paste(F46, 133 -> direct clipboard paste on Android!)
       * Row 3 (SH, ZX, CV, BN, M, BACK):
-        ZX: UP=：(123), DOWN=……(161)
-        CV: UP=“(162), DOWN=”(163)
-        BN: UP=8(107), DOWN=？(125)
-        M : UP=（(117), DOWN=）(118)
+        ZX: UP=：(123), DOWN=“(172)
+        CV: UP=；(124), DOWN=”(173)
+        BN: UP=8(107), DOWN=（(117)
+        M : UP=？(125), DOWN=）(118)
         BACK: CENTER=F36 (backspace), DOWN=F36 (delete), LEFT=F36 (delete), UP=F48 (clear), HOLD=F36
       * Row 4 (123, EN, ，, SPACE, 。, ENTER):
         123: CENTER=F6, UP=F7 (emoji)
         EN : CENTER=F16, UP=F84 (input mode / 14-26 switch)
-        ， : CENTER=，, LEFT=F42 (home, 135), UP=、(160), DOWN=；(124)
+        ， : CENTER=，, LEFT=F42 (home, 135), UP=、(170), DOWN=……(171)
         SPACE: CENTER=F38, UP=F77 (phrase), LEFT=F51, RIGHT=F52, HOLD=F72 (voice)
         。 : CENTER=。, RIGHT=F43 (end, 136), UP=！(110), DOWN=——(174)
         ENTER: CENTER=F39, UP=F76 (clipboard panel, 624)
@@ -405,7 +521,7 @@ def patch_layout_ini_android(orientation: str, fname: str, text: str):
         BACK: CENTER=F36, DOWN=F36, LEFT=F36, UP=F48, HOLD=F36
       * Row 4:
         123: UP=F7, EN/CH: UP=F84
-        ， : CENTER=，, LEFT=F42(home, 135), UP=、(160), DOWN=；(124)
+        ， : CENTER=，, LEFT=F42(home, 135), UP=、(170), DOWN=……(171)
         SPACE: UP=F77
         。 : CENTER=。, RIGHT=F43(end, 136), UP=！(110), DOWN=——(174)
         ENTER: UP=F76(clip, 624)
@@ -413,6 +529,8 @@ def patch_layout_ini_android(orientation: str, fname: str, text: str):
       * 1=menu(F31), 2=select(F47), 3=hide(F8), 4=copy(F45), 5=cut(F44), 6=paste(F46),
         7=home(F42, 135), 8=tab(　　, 134), 9=end(F43, 136), 0=undo(F40, 144), .=del(F37, 145),
         BACK=delete(F36), ENTER=clip(F76)
+    - English 26-key overlays use ASCII punctuation plus € • ° § (including Shift/Caps
+      state TIPs); see patch_english_ascii_punctuation for the complete mapping.
     """
     fl = fname.lower()
     sections = parse_ini_sections(text)
@@ -450,10 +568,10 @@ def patch_layout_ini_android(orientation: str, fname: str, text: str):
             "KEY13": ("g", "h", "g", "h", "F49", "F50", "15,16,140,143,141,142", "140,141,142,143,144,145"),
             "KEY14": ("j", "k", "j", "k", "9", "F45", "17,18,108,132", "140,141,142,143"),
             "KEY15": ("l", "l", "l", "l", "0", "F46", "19,109,133", "1,2,3"),
-            "KEY20": ("z", "x", "x", "z", "：", "……", "20,21,123,171", "140,141,142,143"),
-            "KEY21": ("c", "v", "v", "c", "“", "”", "22,23,172,173", "140,141,142,143"),
-            "KEY22": ("b", "n", "b", "n", "8", "？", "24,25,107,125", "140,141,142,143"),
-            "KEY23": ("m", "m", "m", "m", "（", "）", "26,117,118", "1,2,3"),
+            "KEY20": ("z", "x", "x", "z", "：", "“", "20,21,123,172", "140,141,142,143"),
+            "KEY21": ("c", "v", "v", "c", "；", "”", "22,23,124,173", "140,141,142,143"),
+            "KEY22": ("b", "n", "b", "n", "8", "（", "24,25,107,117", "140,141,142,143"),
+            "KEY23": ("m", "m", "m", "m", "？", "）", "26,125,118", "1,2,3"),
         }
         for k_sec, (l_ch, r_ch, c_ch, s_ch, up_act, dn_act, f_style, p_type) in letter_14_fixes.items():
             if k_sec in sec_map:
@@ -514,13 +632,13 @@ def patch_layout_ini_android(orientation: str, fname: str, text: str):
             set_sec_val(sec_map["KEY30"], "UP", "F84")
             remove_sec_key(sec_map["KEY30"], "DOWN")
 
-        # Comma (KEY31): CENTER=，, LEFT=F42 (home, 135), UP=、(170), DOWN=；(124)
+        # Comma (KEY31): CENTER=，, LEFT=F42 (home, 135), UP=、(170), DOWN=……(171)
         if "KEY31" in sec_map:
-            set_sec_val(sec_map["KEY31"], "FORE_STYLE", "913,170,124,135")
+            set_sec_val(sec_map["KEY31"], "FORE_STYLE", "913,170,171,135")
             set_sec_val(sec_map["KEY31"], "POS_TYPE", "6,23,24,25")
             set_sec_val(sec_map["KEY31"], "CENTER", "，")
             set_sec_val(sec_map["KEY31"], "UP", "、")
-            set_sec_val(sec_map["KEY31"], "DOWN", "；")
+            set_sec_val(sec_map["KEY31"], "DOWN", "……")
             set_sec_val(sec_map["KEY31"], "LEFT", "F42")
             remove_sec_key(sec_map["KEY31"], "RIGHT")
             set_sec_val(sec_map["KEY31"], "HOLD", "F42")
@@ -660,28 +778,31 @@ def patch_layout_ini_android(orientation: str, fname: str, text: str):
             remove_sec_key(sec_map["KEY30"], "DOWN")
 
         # Comma (KEY31) & Period (KEY33):
-        #   KEY31: CENTER=，, LEFT=F42 (home, 135), UP=、(170), DOWN=；(124)
+        #   KEY31: CENTER=，, LEFT=F42 (home, 135), UP=、(170), DOWN=……(171)
         #   KEY33: CENTER=。, RIGHT=F43 (end, 136), UP=！(110), DOWN=——(174)
         is_en26 = fl in {"en_26.ini", "en_26s.ini"}
         if "KEY31" in sec_map:
-            set_sec_val(sec_map["KEY31"], "FORE_STYLE", "913,170,124,135")
+            set_sec_val(sec_map["KEY31"], "FORE_STYLE", "913,170,171,135")
             set_sec_val(sec_map["KEY31"], "POS_TYPE", "6,23,24,25")
             set_sec_val(sec_map["KEY31"], "CENTER", "," if is_en26 else "，")
             set_sec_val(sec_map["KEY31"], "UP", "、")
-            set_sec_val(sec_map["KEY31"], "DOWN", "；")
+            set_sec_val(sec_map["KEY31"], "DOWN", "……")
             set_sec_val(sec_map["KEY31"], "LEFT", "F42")
             remove_sec_key(sec_map["KEY31"], "RIGHT")
             set_sec_val(sec_map["KEY31"], "HOLD", "F25" if is_en26 else "F42")
         if is_en26 and "TIP3" in sec_map:
-            set_sec_val(sec_map["TIP3"], "FORE_STYLE", "912,170,124,135")
+            set_sec_val(sec_map["TIP3"], "FORE_STYLE", "912,170,171,135")
             set_sec_val(sec_map["TIP3"], "POS_TYPE", "6,23,24,25")
             set_sec_val(sec_map["TIP3"], "CENTER", "F25")
             set_sec_val(sec_map["TIP3"], "UP", "、")
-            set_sec_val(sec_map["TIP3"], "DOWN", "；")
+            set_sec_val(sec_map["TIP3"], "DOWN", "……")
             set_sec_val(sec_map["TIP3"], "LEFT", "F42")
             remove_sec_key(sec_map["TIP3"], "RIGHT")
         if "KEY33" in sec_map:
-            set_sec_val(sec_map["KEY33"], "FORE_STYLE", "914,110,174,136")
+            # Reuse the numeric panel's solid ASCII dot glyph for English.
+            # STYLE914 is the hollow Chinese full stop, not an English period.
+            period_fore = "72" if is_en26 else "914"
+            set_sec_val(sec_map["KEY33"], "FORE_STYLE", f"{period_fore},110,174,136")
             set_sec_val(sec_map["KEY33"], "POS_TYPE", "6,32,33,35")
             set_sec_val(sec_map["KEY33"], "CENTER", "." if is_en26 else "。")
             set_sec_val(sec_map["KEY33"], "UP", "！")
@@ -794,6 +915,10 @@ def patch_layout_ini_android(orientation: str, fname: str, text: str):
             set_sec_val(sec_map["KEY18"], "POS_TYPE", "66,71,72,73,74")
             set_sec_val(sec_map["KEY18"], "UP", "F76")
 
+    if fl in {"en_26.ini", "en_26s.ini"}:
+        patch_english_ascii_punctuation(sections)
+    elif fl in {"py_26.ini", "def_26.ini"}:
+        patch_chinese_26_punctuation(sections)
     add_hold_symbol_popups(sections)
 
     # 4. Renumber empty/gapped KEY and TIP sections contiguously and update STAT_STYLE & KEY_NUM / TIP_NUM
@@ -1061,6 +1186,8 @@ def patch_default_css_android(text: str, is_dark: bool, extra_anjian_css: str = 
         (175, "《", nm_sub, 20),
         (176, "》", nm_sub, 20),
         (177, "@", nm_sub, 20),
+        *[(style_id, label, nm_sub, 20) for style_id, label in ENGLISH_SYMBOL_STYLES.items()],
+        *[(style_id, label, nm_sub, 20) for style_id, label in CHINESE_26_SYMBOL_STYLES.items()],
         (630, "sel", nm_sub, 18),
         (631, "壹", nm_sub, 18),
         (632, "贰", nm_sub, 18),
@@ -1095,6 +1222,7 @@ def patch_default_css_android(text: str, is_dark: bool, extra_anjian_css: str = 
         (663, "⑩", nm_sub, 20),
         (664, "零", nm_sub, 18),
         (665, "，", nm_sub, 20),
+        (666, ",", nm_main, 42),
     ]:
         if f"[STYLE{st_id}]" not in text:
             gesture_styles.append(
@@ -1221,11 +1349,11 @@ def build_dual_bds(src_dir: Path, out_bds: Path, skin_name: str):
 
 
 if __name__ == "__main__":
-    old_bds = OUT_DIR / "Write-森林集.bds"
-    if old_bds.exists():
-        old_bds.unlink()
-    build_dual_bds(
-        EXTRACTED_DIR / "dark_14",
-        OUT_DIR / "森林集-全能Pro.bds",
-        "森林集-全能Pro",
-    )
+    parser = argparse.ArgumentParser(description="Build the dual-mode Android phone skin.")
+    parser.add_argument("--source-dir", type=Path, default=EXTRACTED_DIR / "dark_14",
+                        help="Base theme tree containing light/, dark/ and demo.png")
+    parser.add_argument("--output", type=Path, default=OUT_DIR / "森林集-全能Pro.bds")
+    args = parser.parse_args()
+    if not all((args.source_dir / theme).is_dir() for theme in ("light", "dark")):
+        parser.error("Missing light/ or dark/ source tree; use the complete release archive or --source-dir.")
+    build_dual_bds(args.source_dir, args.output, "森林集-全能Pro")

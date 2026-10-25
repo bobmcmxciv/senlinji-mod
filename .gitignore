@@ -1,8 +1,8 @@
 # Local build workspace & root-level working copies
 /_build/
-/*.bdi
-/*.bds
-/*.apk
+*.bdi
+*.bds
+*.apk
 __pycache__/
 *.pyc
 .DS_Store

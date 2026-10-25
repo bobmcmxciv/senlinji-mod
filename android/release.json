@@ -1,0 +1,13 @@
+{
+  "platform": "android-phone",
+  "skin_name": "森林集-全能Pro",
+  "version_code": 13,
+  "tag": "android-v13",
+  "asset_name": "forest-pro-android-v13.bds",
+  "asset_size_bytes": 1161479,
+  "sha256": "f47492d0fa2e8df2e43066ab96b50e7aaa35592aa54e870d1fcbdfff9c87b504",
+  "release_url": "https://github.com/bobmcmxciv/senlinji-mod/releases/tag/android-v13",
+  "download_url": "https://github.com/bobmcmxciv/senlinji-mod/releases/download/android-v13/forest-pro-android-v13.bds",
+  "unique_punctuation_actions_per_26_key_layout": 37,
+  "english_ascii_punctuation_coverage": 32
+}
