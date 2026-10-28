@@ -42,7 +42,7 @@ def verify_english_ascii_punctuation(ini: dict, css: dict, path: str):
         "z": ('"', "178"), "x": ("\\", "179"), "c": ("+", "180"), "v": ("=", "181"),
         "b": ("`", "182"), "n": ("<", "183"), "m": (">", "184"),
     }
-    extensions = set("€•°§")
+    extensions = {"€"}
     direct, popup = set(), set()
     primary_slots = defaultdict(list)
     for section, key in ini.items():
@@ -81,20 +81,35 @@ def verify_english_ascii_punctuation(ini: dict, css: dict, path: str):
     assert set(string.punctuation) <= popup, f"{path}: missing popup symbols {set(string.punctuation)-popup}"
     assert extensions <= direct and extensions <= popup
     duplicates = {s: slots for s, slots in primary_slots.items() if len(slots) > 1}
-    assert not duplicates, f"{path}: duplicate primary punctuation actions: {duplicates}"
-    assert len(primary_slots) == 37, f"{path}: expected 32 ASCII + 4 extended + one ellipsis action"
+    assert duplicates == {
+        "/": ["KEY21/UP", "KEY31/UP"],
+        "-": ["KEY22/UP", "KEY31/DOWN"],
+        "_": ["KEY23/UP", "KEY33/UP"],
+    }, f"{path}: wrong shortcut duplicates: {duplicates}"
+    assert len(primary_slots) == 34, f"{path}: expected 32 ASCII + euro + ellipsis"
+    assert sum(map(len, primary_slots.values())) == 37, f"{path}: expected 37 punctuation actions"
+    for section, up, down in [
+        ("KEY21", "/", "\\"), ("KEY22", "-", "+"), ("KEY23", "_", "="),
+    ]:
+        assert ini[section]["UP"] == up and ini[section]["DOWN"] == down, f"{path}/{section}: original letter gesture changed"
     assert ini["KEY12"]["UP"] == "@" and ini["KEY20"]["DOWN"] == '"' and ini["KEY26"]["UP"] == "?"
     assert ini["KEY11"]["UP"] == "!"
-    assert ini["KEY31"]["CENTER"] == "," and ini["KEY31"]["UP"] == "•" and ini["KEY31"]["DOWN"] == "..."
-    assert ini["KEY31"]["FORE_STYLE"] == "666,193,191,135" and ini["KEY31"]["LEFT"] == "F42"
+    assert ini["KEY31"]["CENTER"] == "," and ini["KEY31"]["UP"] == "/" and ini["KEY31"]["DOWN"] == "-"
+    assert ini["KEY31"]["FORE_STYLE"] == "666,120,121,135" and ini["KEY31"]["LEFT"] == "F42"
+    assert ini["KEY31"]["HOLDSYM"] == ",/-" and ini["KEY31"]["STAT_STYLE"] == "S3_3"
     assert css["STYLE666"]["SHOW"] == "," and css["STYLE191"]["SHOW"] == "..."
-    assert css["STYLE192"]["SHOW"] == "€" and css["STYLE193"]["SHOW"] == "•"
-    assert css["STYLE194"]["SHOW"] == "°" and css["STYLE195"]["SHOW"] == "§"
-    assert ini["TIP3"]["CENTER"] == "F25" and ini["TIP3"]["FORE_STYLE"] == "912,193,191,135"
-    assert ini["TIP3"]["UP"] == "•" and ini["TIP3"]["DOWN"] == "..." and ini["TIP3"]["LEFT"] == "F42"
-    assert ini["KEY33"]["CENTER"] == "." and ini["KEY33"]["UP"] == "°" and ini["KEY33"]["DOWN"] == "§"
-    assert ini["KEY33"]["FORE_STYLE"] == "72,194,195,136" and ini["KEY33"]["RIGHT"] == "F43"
-    assert ini["KEY33"]["HOLDSYM"] == ".°§"
+    for style, symbol in [("120", "/"), ("121", "-"), ("122", "_"), ("192", "€")]:
+        assert css["STYLE" + style]["SHOW"] == symbol
+    assert ini["TIP3"]["CENTER"] == "F25" and ini["TIP3"]["FORE_STYLE"] == "912,120,121,135"
+    assert ini["TIP3"]["UP"] == "/" and ini["TIP3"]["DOWN"] == "-" and ini["TIP3"]["LEFT"] == "F42"
+    assert ini["TIP3"]["HOLDSYM"] == "/-"
+    assert ini["KEY33"]["CENTER"] == "." and ini["KEY33"]["UP"] == "_" and ini["KEY33"]["DOWN"] == "..."
+    assert ini["KEY33"]["FORE_STYLE"] == "72,122,191,136" and ini["KEY33"]["RIGHT"] == "F43"
+    assert ini["KEY33"]["HOLDSYM"] == "._"
+    for section in ("KEY31", "TIP3", "KEY33"):
+        assert "HOLD" not in ini[section], f"{path}/{section}: HOLD masks native popup"
+    assert "RIGHT" not in ini["KEY31"] and "RIGHT" not in ini["TIP3"]
+    assert "LEFT" not in ini["KEY33"]
 
 
 def verify_chinese_26_punctuation(ini: dict, css: dict, path: str):
@@ -208,7 +223,7 @@ def main():
         assert "Style=default" in info_txt, "Info.txt missing Style=default"
         assert "SupportDarkMode=1" in info_txt, "Info.txt missing SupportDarkMode=1"
         assert "Abilities=Sound" in info_txt, "Info.txt missing Abilities=Sound"
-        assert "VersionCode=13" in info_txt, "Expected the matched Chinese 26-key punctuation release (v13)"
+        assert "VersionCode=16" in info_txt, "Expected the English 26-key technical shortcut release (v16)"
 
         for ogg_path in [
             "light/res/aj.ogg",
@@ -270,7 +285,7 @@ def main():
 
             for ori in ["port", "land"]:
                 gen = parse_ini_dict(zf.read(f"{theme}/{ori}/gen.ini").decode("utf-8"))
-                for req_off in ["OFFSET23", "OFFSET24", "OFFSET25", "OFFSET32", "OFFSET33", "OFFSET35", "OFFSET144", "OFFSET145"]:
+                for req_off in ["OFFSET23", "OFFSET24", "OFFSET25", "OFFSET32", "OFFSET33", "OFFSET35"]:
                     assert req_off in gen and "POS" in gen[req_off], f"{theme}/{ori}/gen.ini missing {req_off}"
 
                 # Verify 14-key layouts (py_9.ini, py_14.ini, def_9.ini)
@@ -281,7 +296,7 @@ def main():
                     assert ini14["KEY1"]["DOWN"] == "F31" and ini14["KEY1"]["FORE_STYLE"] == "1,2,100,620"
                     assert ini14["KEY2"]["DOWN"] == "@" and ini14["KEY2"]["FORE_STYLE"] == "3,4,101,177"
                     assert ini14["KEY2"]["HOLDSYM"] == "eErR2@"
-                    assert ini14["KEY8"]["HOLDSYM"] == "gGhH"
+                    assert ini14["KEY8"]["HOLDSYM"] == "gGhH8～"
                     assert ini14["KEY3"]["DOWN"] == "F37" and ini14["KEY3"]["FORE_STYLE"] == "5,6,102,145"
                     assert ini14["KEY4"]["DOWN"] == "F48" and ini14["KEY4"]["FORE_STYLE"] == "7,8,103,146"
                     assert ini14["KEY5"]["DOWN"] == "　　" and ini14["KEY5"]["FORE_STYLE"] == "9,10,104,134"
@@ -290,13 +305,14 @@ def main():
                     assert ini14["KEY6"]["DOWN"] == "F47" and ini14["KEY6"]["FORE_STYLE"] == "11,12,105,130"
                     assert ini14["KEY7"]["DOWN"] == "F44" and ini14["KEY7"]["FORE_STYLE"] == "13,14,106,131"
                     assert (
-                        ini14["KEY8"]["UP"] == "F49"
-                        and ini14["KEY8"]["DOWN"] == "F50"
+                        ini14["KEY8"]["UP"] == "8"
+                        and ini14["KEY8"]["DOWN"] == "～"
                         and ini14["KEY8"]["LEFT"] == "g"
                         and ini14["KEY8"]["RIGHT"] == "h"
                         and ini14["KEY8"]["CENTER"] == "g"
                         and ini14["KEY8"]["SHOW"] == "h"
-                        and ini14["KEY8"]["FORE_STYLE"] == "15,16,140,143,141,142"
+                        and ini14["KEY8"]["FORE_STYLE"] == "15,16,107,206"
+                        and ini14["KEY8"]["POS_TYPE"] == "140,141,142,143"
                     )
                     assert ini14["KEY9"]["DOWN"] == "F45" and ini14["KEY9"]["FORE_STYLE"] == "17,18,108,132"
                     assert ini14["KEY10"]["DOWN"] == "F46" and ini14["KEY10"]["FORE_STYLE"] == "19,109,133"
@@ -308,12 +324,12 @@ def main():
                     assert ini14["KEY12"]["FORE_STYLE"] == "22,23,124,173"
                     assert ini14["KEY12"]["HOLDSYM"] == "cCvV；”"
                     # Keep gestures, keycap labels and native long-press choices in sync.
-                    assert ini14["KEY13"]["UP"] == "8" and ini14["KEY13"]["DOWN"] == "（"
-                    assert ini14["KEY13"]["FORE_STYLE"] == "24,25,107,117"
-                    assert ini14["KEY13"]["HOLDSYM"] == "bBnN8（"
-                    assert ini14["KEY14"]["UP"] == "？" and ini14["KEY14"]["DOWN"] == "）"
-                    assert ini14["KEY14"]["FORE_STYLE"] == "26,125,118"
-                    assert ini14["KEY14"]["HOLDSYM"] == "mM？）"
+                    assert ini14["KEY13"]["UP"] == "？" and ini14["KEY13"]["DOWN"] == "（"
+                    assert ini14["KEY13"]["FORE_STYLE"] == "24,25,220,216"
+                    assert ini14["KEY13"]["HOLDSYM"] == "bBnN？（"
+                    assert ini14["KEY14"]["UP"] == "！" and ini14["KEY14"]["DOWN"] == "）"
+                    assert ini14["KEY14"]["FORE_STYLE"] == "26,215,217"
+                    assert ini14["KEY14"]["HOLDSYM"] == "mM！）"
                     # Existing compact keycap glyphs use ASCII for these symbols.
                     assert css["STYLE117"]["SHOW"] == "(" and css["STYLE125"]["SHOW"] == "?"
                     assert css["STYLE124"]["SHOW"] == ";" and css["STYLE171"]["SHOW"] == "…"
@@ -351,16 +367,17 @@ def main():
                     assert (
                         ini14["KEY19"]["LEFT"] == "F42"
                         and ini14["KEY19"]["UP"] == "、"
-                        and ini14["KEY19"]["DOWN"] == "……"
-                        and ini14["KEY19"]["FORE_STYLE"] == "913,170,171,135"
-                        and ini14["KEY19"]["HOLDSYM"] == "，、…"
+                        and ini14["KEY19"]["DOWN"] == "-"
+                        and ini14["KEY19"]["FORE_STYLE"] == "913,170,121,135"
+                        and ini14["KEY19"]["HOLDSYM"] == "，、-"
                     )
                     assert ini14["KEY20"]["UP"] == "F77"
                     assert (
                         ini14["KEY21"]["RIGHT"] == "F43"
-                        and ini14["KEY21"]["UP"] == "！"
-                        and ini14["KEY21"]["DOWN"] == "——"
-                        and ini14["KEY21"]["FORE_STYLE"] == "914,110,174,136"
+                        and ini14["KEY21"]["UP"] == "·"
+                        and ini14["KEY21"]["DOWN"] == "……"
+                        and ini14["KEY21"]["FORE_STYLE"] == "914,213,214,136"
+                        and ini14["KEY21"]["HOLDSYM"] == "。·…"
                     )
                     assert ini14["KEY22"]["UP"] == "F76" and ini14["KEY22"]["FORE_STYLE"] == "917,624"
 

@@ -230,7 +230,7 @@ def make_android_info_txt(name: str, dual_mode: bool = True, has_sound: bool = T
         lines.append("Abilities=Sound")
     # Bump on release. Deploy via ImeUpdateActivity + Apply under a versioned
     # filename; overwriting an already active .bds does not reload its keymap.
-    lines.append("VersionCode=13")
+    lines.append("VersionCode=16")
     return "\r\n".join(lines) + "\r\n"
 
 
@@ -300,14 +300,12 @@ def build_sym_assets(theme_dir: Path):
 def patch_gen_ini_android(orientation: str, text: str) -> str:
     """
     1. Set [HINT] LAYOUT_NAME=hint2 (and remove TYPE=0) so swipe preview popups work globally.
-    2. Add [OFFSET144] and [OFFSET145] for the left ('L') and right ('R') cursor labels
-       on the 14-key GH key, and [OFFSET8] for the 'sel' (F61) label on SH.
+    2. Set [OFFSET8] for the 'sel' (F61) label on SH.
     3. Set [OFFSET23..25] on KEY31 (comma: top=UP, bottom=DOWN, left=LEFT 'home')
        and [OFFSET32,33,35] on KEY33 (period: top=UP, bottom=DOWN, right=RIGHT 'end').
     4. Set [OFFSET64,65,73,80,81,82] for number-pad (num_9/num_26) swipe sub-labels.
     """
     sections = parse_ini_sections(text)
-    lr_x = 64 if orientation == "port" else 105
     top_y = -44 if orientation == "port" else -59
     bot_y = 38 if orientation == "port" else 51
     comma_left_x = -27 if orientation == "port" else -48
@@ -329,8 +327,6 @@ def patch_gen_ini_android(orientation: str, text: str) -> str:
         "OFFSET80": f"0,{bot_y}",
         "OFFSET81": f"-{num_side_x},0",
         "OFFSET82": f"{num_side_x},0",
-        "OFFSET144": f"-{lr_x},0",
-        "OFFSET145": f"{lr_x},0",
     }
     found = set()
 
@@ -387,7 +383,7 @@ def patch_english_ascii_punctuation(sections):
     Patch the letter's state TIPs as well as its primary KEY, so temporary Shift
     and Caps Lock cannot bring back Chinese symbols or obsolete popup choices.
     Preserve the letter-key upper swipes, digits, cursor and native slide-delete.
-    Use four distinct Western extensions (€ • ° §) in formerly duplicate slots.
+    Keep € and add bottom-row / - _ shortcuts without moving their letter slots.
     """
     down_symbols = {
         "w": ("€", 192),
@@ -414,15 +410,15 @@ def patch_english_ascii_punctuation(sections):
         elif name == "KEY31" or name == "TIP3":
             # Retain TIP3's native F25 action/icon, but never its Chinese flicks.
             base_fore = "666" if name == "KEY31" else "912"
-            set_sec_val(items, "UP", "•")
-            set_sec_val(items, "DOWN", "...")
-            set_sec_val(items, "FORE_STYLE", f"{base_fore},193,191,135")
+            set_sec_val(items, "UP", "/")
+            set_sec_val(items, "DOWN", "-")
+            set_sec_val(items, "FORE_STYLE", f"{base_fore},120,121,135")
             remove_sec_key(items, "HOLD")
             remove_sec_key(items, "HOLDSYM")
         elif name == "KEY33":
-            set_sec_val(items, "UP", "°")
-            set_sec_val(items, "DOWN", "§")
-            set_sec_val(items, "FORE_STYLE", "72,194,195,136")
+            set_sec_val(items, "UP", "_")
+            set_sec_val(items, "DOWN", "...")
+            set_sec_val(items, "FORE_STYLE", "72,122,191,136")
             remove_sec_key(items, "HOLD")
             remove_sec_key(items, "HOLDSYM")
 
@@ -490,22 +486,22 @@ def patch_layout_ini_android(orientation: str, fname: str, text: str):
       * Row 2 (AS, DF, GH, JK, L):
         AS: UP=6, DOWN=select(F47, 130)
         DF: UP=7, DOWN=cut(F44, 131)
-        GH: UP=F49, DOWN=F50; LEFT=g and RIGHT=h must remain registered
-            for ambiguous 14-key input. Do not replace them with F51/F52.
+        GH: UP=8(107), DOWN=～(206); LEFT=g and RIGHT=h remain registered
+            for ambiguous 14-key input. No cursor gesture labels on this key.
         JK: UP=9, DOWN=copy(F45, 132)
         L : UP=0, DOWN=paste(F46, 133 -> direct clipboard paste on Android!)
       * Row 3 (SH, ZX, CV, BN, M, BACK):
         ZX: UP=：(123), DOWN=“(172)
         CV: UP=；(124), DOWN=”(173)
-        BN: UP=8(107), DOWN=（(117)
-        M : UP=？(125), DOWN=）(118)
+        BN: UP=？(220), DOWN=（(216)
+        M : UP=！(215), DOWN=）(217)
         BACK: CENTER=F36 (backspace), DOWN=F36 (delete), LEFT=F36 (delete), UP=F48 (clear), HOLD=F36
       * Row 4 (123, EN, ，, SPACE, 。, ENTER):
         123: CENTER=F6, UP=F7 (emoji)
         EN : CENTER=F16, UP=F84 (input mode / 14-26 switch)
-        ， : CENTER=，, LEFT=F42 (home, 135), UP=、(170), DOWN=……(171)
+        ， : CENTER=，, LEFT=F42 (home, 135), UP=、(170), DOWN=-(121)
         SPACE: CENTER=F38, UP=F77 (phrase), LEFT=F51, RIGHT=F52, HOLD=F72 (voice)
-        。 : CENTER=。, RIGHT=F43 (end, 136), UP=！(110), DOWN=——(174)
+        。 : CENTER=。, RIGHT=F43 (end, 136), UP=·(213), DOWN=……(214)
         ENTER: CENTER=F39, UP=F76 (clipboard panel, 624)
     - 26-Key (py_26.ini, def_26.ini, en_26.ini, en_26s.ini):
       * Row 1: Q=menu(F31, 620), W=@(177), E=forward-del(F37, 145), R=clear(F48, 146), T=tab/indent(　　, 134), P=hide(F8, 621)
@@ -565,13 +561,13 @@ def patch_layout_ini_android(orientation: str, fname: str, text: str):
             "KEY5": ("o", "p", "p", "o", "5", "　　", "9,10,104,134", "140,141,142,143"),
             "KEY11": ("a", "s", "s", "a", "6", "F47", "11,12,105,130", "140,141,142,143"),
             "KEY12": ("d", "f", "d", "f", "7", "F44", "13,14,106,131", "140,141,142,143"),
-            "KEY13": ("g", "h", "g", "h", "F49", "F50", "15,16,140,143,141,142", "140,141,142,143,144,145"),
+            "KEY13": ("g", "h", "g", "h", "8", "～", "15,16,107,206", "140,141,142,143"),
             "KEY14": ("j", "k", "j", "k", "9", "F45", "17,18,108,132", "140,141,142,143"),
             "KEY15": ("l", "l", "l", "l", "0", "F46", "19,109,133", "1,2,3"),
             "KEY20": ("z", "x", "x", "z", "：", "“", "20,21,123,172", "140,141,142,143"),
             "KEY21": ("c", "v", "v", "c", "；", "”", "22,23,124,173", "140,141,142,143"),
-            "KEY22": ("b", "n", "b", "n", "8", "（", "24,25,107,117", "140,141,142,143"),
-            "KEY23": ("m", "m", "m", "m", "？", "）", "26,125,118", "1,2,3"),
+            "KEY22": ("b", "n", "b", "n", "？", "（", "24,25,220,216", "140,141,142,143"),
+            "KEY23": ("m", "m", "m", "m", "！", "）", "26,215,217", "1,2,3"),
         }
         for k_sec, (l_ch, r_ch, c_ch, s_ch, up_act, dn_act, f_style, p_type) in letter_14_fixes.items():
             if k_sec in sec_map:
@@ -632,24 +628,24 @@ def patch_layout_ini_android(orientation: str, fname: str, text: str):
             set_sec_val(sec_map["KEY30"], "UP", "F84")
             remove_sec_key(sec_map["KEY30"], "DOWN")
 
-        # Comma (KEY31): CENTER=，, LEFT=F42 (home, 135), UP=、(170), DOWN=……(171)
+        # Comma (KEY31): CENTER=，, LEFT=F42 (home, 135), UP=、(170), DOWN=-(121)
         if "KEY31" in sec_map:
-            set_sec_val(sec_map["KEY31"], "FORE_STYLE", "913,170,171,135")
+            set_sec_val(sec_map["KEY31"], "FORE_STYLE", "913,170,121,135")
             set_sec_val(sec_map["KEY31"], "POS_TYPE", "6,23,24,25")
             set_sec_val(sec_map["KEY31"], "CENTER", "，")
             set_sec_val(sec_map["KEY31"], "UP", "、")
-            set_sec_val(sec_map["KEY31"], "DOWN", "……")
+            set_sec_val(sec_map["KEY31"], "DOWN", "-")
             set_sec_val(sec_map["KEY31"], "LEFT", "F42")
             remove_sec_key(sec_map["KEY31"], "RIGHT")
             set_sec_val(sec_map["KEY31"], "HOLD", "F42")
 
-        # Period: tap=。, up=！, down=——; keep right=end.
+        # Period: tap=。, up=·, down=……; keep right=end.
         if "KEY33" in sec_map:
-            set_sec_val(sec_map["KEY33"], "FORE_STYLE", "914,110,174,136")
+            set_sec_val(sec_map["KEY33"], "FORE_STYLE", "914,213,214,136")
             set_sec_val(sec_map["KEY33"], "POS_TYPE", "6,32,33,35")
             set_sec_val(sec_map["KEY33"], "CENTER", "。")
-            set_sec_val(sec_map["KEY33"], "UP", "！")
-            set_sec_val(sec_map["KEY33"], "DOWN", "——")
+            set_sec_val(sec_map["KEY33"], "UP", "·")
+            set_sec_val(sec_map["KEY33"], "DOWN", "……")
             set_sec_val(sec_map["KEY33"], "RIGHT", "F43")
             remove_sec_key(sec_map["KEY33"], "LEFT")
             set_sec_val(sec_map["KEY33"], "HOLD", "F43")
